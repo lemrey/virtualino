@@ -1,0 +1,931 @@
+package com.virtualino.ui;
+
+import com.ardublock.core.Context;
+import com.ardublock.translator.Translator;
+import com.ardublock.translator.block.exception.BlockException;
+import com.ardublock.translator.block.exception.SocketNullException;
+import com.ardublock.ui.OpenblocksFrame;
+import com.virtualino.Emulator;
+import com.virtualino.InoWrapper;
+import com.virtualino.PinController;
+import com.virtualino.ProjectManager;
+import com.virtualino.components.AnalogLedComponent;
+import com.virtualino.components.ButtonComponent;
+import com.virtualino.components.BuzzerComponent;
+import com.virtualino.components.GenericComponent;
+import com.virtualino.components.GreenLedComponent;
+import com.virtualino.components.LDRComponent;
+import com.virtualino.components.RGBLedComponent;
+import com.virtualino.components.RedLedComponent;
+import com.virtualino.components.SliderComponent;
+import com.virtualino.components.TemperatureComponent;
+import com.virtualino.components.YellowLedComponent;
+import com.virtualino.net.NetCom;
+import com.virtualino.ui.listener.EmulateButtonListener;
+import edu.mit.blocks.codeblocks.Block;
+import edu.mit.blocks.renderable.FactoryRenderableBlock;
+import edu.mit.blocks.renderable.RenderableBlock;
+import edu.mit.blocks.workspace.Workspace;
+import java.awt.Color;
+import java.awt.Component;
+import java.awt.Cursor;
+import java.awt.Image;
+import java.awt.Point;
+import java.awt.Toolkit;
+import java.awt.event.ActionEvent;
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+import javax.imageio.ImageIO;
+import javax.swing.AbstractAction;
+import javax.swing.JLabel;
+import javax.swing.JOptionPane;
+
+/**
+ * Main Frame for Virtualino. Contains both the simulation area and the
+ * programming interface (Ardublock).
+ *
+ * @author Emanuele 'lemrey' Di Santo
+ */
+public class VirtualinoFrame extends javax.swing.JFrame
+{
+    private final Point pointZero = new Point(0, 0);
+    private StatusBar statusBar = new StatusBar();
+    private EmulatorFrame emulatorFrame = new EmulatorFrame();
+    //private InoWrapper Ino;
+    private OpenblocksFrame openBlocksFrame;
+    private SerialMonitorFrame serialMonitor;
+    private ProjectManager projectMng;
+    private String projectName;
+    private /*static*/ boolean isEmulationRunning;
+    private /*static*/ boolean isComponentBeingDragged;
+    private Cursor cursorOpenHand;
+    private Cursor cursorClosedHand;
+
+    public VirtualinoFrame(OpenblocksFrame frame)
+    {
+	initComponents();
+	setTitle("Virtualino");
+	setVisible(true);
+
+	openBlocksFrame = frame;
+
+	jSplitPane1.setBottomComponent(openBlocksFrame);
+	jSplitPane2.setRightComponent(emulatorFrame);
+
+	jToolBar.add(statusBar, -1);
+
+	isEmulationRunning = false;
+	isComponentBeingDragged = false;
+
+	/* Load mouse cursors to be displayed while hovering
+	 * component's palette
+	 */
+	try {
+	    Image imgOpenHand = ImageIO.read(getClass().getResourceAsStream(
+		    "/com/virtualino/ui/open-hand.gif"));
+	    Image imgClosedHand = ImageIO.read(getClass().getResourceAsStream(
+		    "/com/virtualino/ui/closed-hand.gif"));
+
+	    Toolkit toolkit = Toolkit.getDefaultToolkit();
+	    cursorOpenHand = toolkit.createCustomCursor(imgOpenHand, pointZero, "cursor");
+	    cursorClosedHand = toolkit.createCustomCursor(imgClosedHand, pointZero, "cursor");
+	}
+	catch (IOException ex) {
+	    Logger.getLogger(VirtualinoFrame.class.getName()).log(Level.SEVERE, null, ex);
+	}
+
+	//Ino = new InoWrapper("./");
+
+	// Init socket connection
+	NetCom.getInstance().startListening(new PinController());
+    }
+
+    public void addVirtualinoComponent(GenericComponent component)
+    {
+	Block b = null;
+	Context c = Context.getContext();
+	Workspace w = c.getWorkspace();
+
+	emulatorFrame.add(component);
+	emulatorFrame.repaint();
+
+	if (component instanceof RedLedComponent) {
+	    b = new Block(w, component.toString()/*"ino_led_r"*/, component.getName());
+	}
+	else if (component instanceof GreenLedComponent) {
+	    b = new Block(w, "ino_led_g", component.getName());
+	}
+	else if (component instanceof YellowLedComponent) {
+	    b = new Block(w, "ino_led_y", component.getName());
+	}
+	else if (component instanceof AnalogLedComponent) {
+	    b = new Block(w, "ino_analog_led", component.getName());
+	}
+	else if (component instanceof ButtonComponent) {
+	    b = new Block(w, "ino_button", component.getName());
+	}
+	else if (component instanceof LDRComponent) {
+	    b = new Block(w, "ino_ldr", component.getName());
+	}
+	else if (component instanceof SliderComponent) {
+	    b = new Block(w, "ino_slider", component.getName());
+	}
+	else if (component instanceof BuzzerComponent) {
+	    b = new Block(w, "ino_buzzer", component.getName());
+	}
+	else if (component instanceof TemperatureComponent) {
+	    b = new Block(w, "ino_temperature", component.getName());
+	}
+	else if (component instanceof RGBLedComponent) {
+	    b = new Block(w, "ino_rgb_led", component.getName());
+	}
+
+	// create the block factory
+	FactoryRenderableBlock frb = new FactoryRenderableBlock(w,
+		w.getFactoryManager(), b.getBlockID());
+
+	// add the block factory to Virtualino's drawer          
+	w.getFactoryManager().addStaticBlock(frb, "Virtualino");
+    }
+
+    public String askForComponentName()
+    {
+	String name = new String();
+	PinController pc = new PinController();
+
+	boolean isNameGood = false;
+
+	while (!isNameGood) {
+	    name = JOptionPane.showInputDialog("Enter component name");
+	    if (name != null) {
+		isNameGood = !pc.findComponent(name) && !name.isEmpty();
+	    }
+	    else {
+		// user hit cancel
+		//return;
+	    }
+
+	    if (!isNameGood) {
+		JOptionPane.showMessageDialog(this, "Name is invalid or"
+						    + " already in use, try again.");
+	    }
+	}
+
+	return name;
+    }
+
+    private void jButtonLoadActionPerformed(java.awt.event.ActionEvent evt)//GEN-FIRST:event_jButtonLoadActionPerformed
+    {//GEN-HEADEREND:event_jButtonLoadActionPerformed
+	openBlocksFrame.doOpenArduBlockFile();
+
+	try {
+
+	    BufferedReader in = new BufferedReader(new FileReader("save.txt"));
+
+	    int items = new Integer(in.readLine()).intValue();
+	    System.out.println("found : " + items);
+	    while (items-- > 0) {
+		String genera = in.readLine();
+		String name = in.readLine();
+		GenericComponent e = null;
+		if (genera.equals("redled")) {
+		    e = new RedLedComponent(name);
+		}
+		else if (genera.equals("button")) {
+		    e = new ButtonComponent(name);
+		}
+		int x = new Integer(in.readLine()).intValue();
+		int y = new Integer(in.readLine()).intValue();
+		e.setLocation(x, y);
+		addVirtualinoComponent(e);
+
+	    }
+
+	    in.close();
+	}
+	catch (IOException i) {
+	    i.printStackTrace();
+	}
+    }//GEN-LAST:event_jButtonLoadActionPerformed
+
+ private void jButtonSaveActionPerformed(java.awt.event.ActionEvent evt)//GEN-FIRST:event_jButtonSaveActionPerformed
+    {//GEN-HEADEREND:event_jButtonSaveActionPerformed
+	//openBlocksFrame.doSaveArduBlockFile();
+
+	FileWriter output = null;
+	try {
+	    output = new FileWriter("save.txt");
+	    BufferedWriter writer = new BufferedWriter(output);
+	    writer.write(String.valueOf(emulatorFrame.getComponents().length));
+	    writer.newLine();
+
+	    for (Component c : emulatorFrame.getComponents()) {
+
+		if (c instanceof ButtonComponent) {
+		    writer.write("button");
+		}
+		if (c instanceof RedLedComponent) {
+		    writer.write("redled");
+		}
+		writer.newLine();
+		writer.write(c.getName());
+		writer.newLine();
+		writer.write(String.valueOf(c.getX()));
+		writer.newLine();
+		writer.write(String.valueOf(c.getY()));
+		writer.newLine();
+	    }
+	    writer.close();
+	    output.close();
+	}
+	catch (Exception e) {
+	    //throw new RuntimeException(e);
+	}
+	finally {
+	    if (output != null) {
+		try {
+		    output.close();
+		}
+		catch (IOException e) {
+		    // Ignore issues during closing
+		}
+	    }
+	}
+
+
+
+
+
+    }//GEN-LAST:event_jButtonSaveActionPerformed
+
+    private void jButtonUploadActionPerformed(java.awt.event.ActionEvent evt)//GEN-FIRST:event_jButtonUploadActionPerformed
+    {//GEN-HEADEREND:event_jButtonUploadActionPerformed
+
+	if (serialMonitor != null) {
+	    serialMonitor.releaseSerial();
+	}
+
+	// if projectName != null
+	if (projectMng != null) {
+	    //Ino.uploadFirmware(projectName);
+	    projectMng.uploadProject();
+	}
+    }//GEN-LAST:event_jButtonUploadActionPerformed
+
+    private void jButtonSerialActionPerformed(java.awt.event.ActionEvent evt)//GEN-FIRST:event_jButtonSerialActionPerformed
+    {//GEN-HEADEREND:event_jButtonSerialActionPerformed
+	if (serialMonitor == null) {
+	    serialMonitor = new SerialMonitorFrame();
+	}
+	serialMonitor.setVisible(true);
+    }//GEN-LAST:event_jButtonSerialActionPerformed
+
+    private void paletteMouseEntered(java.awt.event.MouseEvent evt)//GEN-FIRST:event_paletteMouseEntered
+    {//GEN-HEADEREND:event_paletteMouseEntered
+	((JLabel) evt.getSource()).setCursor(cursorOpenHand);
+    }//GEN-LAST:event_paletteMouseEntered
+
+    private void paletteMouseExited(java.awt.event.MouseEvent evt)//GEN-FIRST:event_paletteMouseExited
+    {//GEN-HEADEREND:event_paletteMouseExited
+	if (isComponentBeingDragged == false) {
+	    ((JLabel) evt.getSource()).setCursor(Cursor.getDefaultCursor());
+	}
+    }//GEN-LAST:event_paletteMouseExited
+
+    private void paletteMousePressed(java.awt.event.MouseEvent evt)//GEN-FIRST:event_paletteMousePressed
+    {//GEN-HEADEREND:event_paletteMousePressed
+	((JLabel) evt.getSource()).setCursor(cursorClosedHand);
+    }//GEN-LAST:event_paletteMousePressed
+
+    /*
+     * Handles the draggin of palette items (components) on the canvas,
+     * and allocates the appropriate class.
+     */
+    private void paletteMouseReleased(java.awt.event.MouseEvent evt)//GEN-FIRST:event_paletteMouseReleased
+    {//GEN-HEADEREND:event_paletteMouseReleased
+	// change cursor settings
+	isComponentBeingDragged = false;
+	((JLabel) evt.getSource()).setCursor(Cursor.getDefaultCursor());
+
+	int x = evt.getXOnScreen() - emulatorFrame.getLocationOnScreen().x;
+	int y = evt.getYOnScreen() - emulatorFrame.getLocationOnScreen().y;
+
+	if (emulatorFrame.contains(x, y)) {
+
+	    String componentName;
+	    GenericComponent component = null;
+
+	    Object source = evt.getSource();
+	    componentName = askForComponentName();
+
+	    if (source.equals(jLabelButton)) {
+		component = new ButtonComponent(componentName);
+	    }
+	    else if (source.equals(jLabelSlider)) {
+		component = new SliderComponent(componentName);
+	    }
+	    else if (source.equals(jLabelLDR)) {
+		component = new LDRComponent(componentName);
+	    }
+	    else if (source.equals(jLabelBuzzer)) {
+		component = new BuzzerComponent(componentName);
+	    }
+	    else if (source.equals(jLabelTemperature)) {
+		component = new TemperatureComponent(componentName);
+	    }
+	    else if (source.equals(jLabelYellowLed)) {
+		component = new YellowLedComponent(componentName);
+	    }
+	    else if (source.equals(jLabelGreenLed)) {
+		component = new GreenLedComponent(componentName);
+	    }
+	    else if (source.equals(jLabelRedLed)) {
+		component = new RedLedComponent(componentName);
+	    }
+	    else if (source.equals(jLabelRedLedAnalog)) {
+		component = new AnalogLedComponent(componentName, Color.red);
+	    }
+	    else if (source.equals(jLabelGreenLedAnalog)) {
+		component = new AnalogLedComponent(componentName, Color.green);
+	    }
+	    else if (source.equals(jLabelYellowLedAnalog)) {
+		component = new AnalogLedComponent(componentName, Color.yellow);
+	    }
+	    else if (source.equals(jLabelRGB)) {
+		component = new RGBLedComponent(componentName);
+	    }
+
+	    component.setLocation(x, y);
+	    addVirtualinoComponent(component);
+	}
+    }//GEN-LAST:event_paletteMouseReleased
+
+    private void jMenuItemNewActionPerformed(java.awt.event.ActionEvent evt)//GEN-FIRST:event_jMenuItemNewActionPerformed
+    {//GEN-HEADEREND:event_jMenuItemNewActionPerformed
+	/*String*/ projectName = JOptionPane.showInputDialog("Project name");
+	if (!projectName.isEmpty()) {
+	    //Ino.initProject(projectName);
+	    projectMng = new ProjectManager("./", projectName);
+	    for (Component c : emulatorFrame.getComponents()) {
+		System.out.println("removing " + c.getName());
+		emulatorFrame.remove(c);
+		//((GenericComponent)c). // gotta release the pins
+	    }
+	}
+    }//GEN-LAST:event_jMenuItemNewActionPerformed
+
+    private void jMenuItemLoadActionPerformed(java.awt.event.ActionEvent evt)//GEN-FIRST:event_jMenuItemLoadActionPerformed
+    {//GEN-HEADEREND:event_jMenuItemLoadActionPerformed
+	openBlocksFrame.doOpenArduBlockFile();
+    }//GEN-LAST:event_jMenuItemLoadActionPerformed
+
+  private void jMenuItemSaveActionPerformed(java.awt.event.ActionEvent evt)//GEN-FIRST:event_jMenuItemSaveActionPerformed
+    {//GEN-HEADEREND:event_jMenuItemSaveActionPerformed
+	openBlocksFrame.doSaveArduBlockFile();
+    }//GEN-LAST:event_jMenuItemSaveActionPerformed
+
+    /**
+     * This method is called from within the constructor to initialize the form.
+     * WARNING: Do NOT modify this code. The content of this method is always
+     * regenerated by the Form Editor.
+     */
+    @SuppressWarnings("unchecked")
+    // <editor-fold defaultstate="collapsed" desc="Generated Code">//GEN-BEGIN:initComponents
+    private void initComponents()
+    {
+
+        jToolBar = new javax.swing.JToolBar();
+        jButtonLoad = new javax.swing.JButton();
+        jButtonSave = new javax.swing.JButton();
+        jButtonEmulate = new javax.swing.JButton();
+        jButtonUpload = new javax.swing.JButton();
+        jButtonSerial = new javax.swing.JButton();
+        filler1 = new javax.swing.Box.Filler(new java.awt.Dimension(0, 0), new java.awt.Dimension(0, 0), new java.awt.Dimension(32767, 0));
+        jSplitPane1 = new javax.swing.JSplitPane();
+        jSplitPane2 = new javax.swing.JSplitPane();
+        jTabbedPane1 = new javax.swing.JTabbedPane();
+        jPanel2 = new javax.swing.JPanel();
+        jLabelRedLed = new javax.swing.JLabel();
+        jLabelGreenLed = new javax.swing.JLabel();
+        jLabelYellowLed = new javax.swing.JLabel();
+        jLabelRedLedAnalog = new javax.swing.JLabel();
+        jLabelGreenLedAnalog = new javax.swing.JLabel();
+        jLabelYellowLedAnalog = new javax.swing.JLabel();
+        jLabelRGB = new javax.swing.JLabel();
+        jLabelButton = new javax.swing.JLabel();
+        jLabelSlider = new javax.swing.JLabel();
+        jLabelSlideLog = new javax.swing.JLabel();
+        jLabelBuzzer = new javax.swing.JLabel();
+        jLabelLDR = new javax.swing.JLabel();
+        jLabelTemperature = new javax.swing.JLabel();
+        jPanel3 = new javax.swing.JPanel();
+        jLabel7 = new javax.swing.JLabel();
+        jLabel9 = new javax.swing.JLabel();
+        jLabel10 = new javax.swing.JLabel();
+        jMenuBar = new javax.swing.JMenuBar();
+        jMenuFile = new javax.swing.JMenu();
+        jMenuItemNew = new javax.swing.JMenuItem();
+        jMenuItemLoad = new javax.swing.JMenuItem();
+        jMenuItemSave = new javax.swing.JMenuItem();
+        jSeparator1 = new javax.swing.JPopupMenu.Separator();
+        jMenuItemExit = new javax.swing.JMenuItem();
+        jMenuHelp = new javax.swing.JMenu();
+        jMenuItem1 = new javax.swing.JMenuItem();
+
+        setDefaultCloseOperation(javax.swing.WindowConstants.EXIT_ON_CLOSE);
+        setMinimumSize(new java.awt.Dimension(640, 640));
+
+        jToolBar.setBorder(javax.swing.BorderFactory.createEtchedBorder());
+        jToolBar.setRollover(true);
+
+        jButtonLoad.setText("load");
+        jButtonLoad.setFocusable(false);
+        jButtonLoad.addActionListener(new java.awt.event.ActionListener()
+        {
+            public void actionPerformed(java.awt.event.ActionEvent evt)
+            {
+                jButtonLoadActionPerformed(evt);
+            }
+        });
+        jToolBar.add(jButtonLoad);
+
+        jButtonSave.setText("save");
+        jButtonSave.setFocusable(false);
+        jButtonSave.addActionListener(new java.awt.event.ActionListener()
+        {
+            public void actionPerformed(java.awt.event.ActionEvent evt)
+            {
+                jButtonSaveActionPerformed(evt);
+            }
+        });
+        jToolBar.add(jButtonSave);
+
+        jButtonEmulate.setText("emulate");
+        jButtonEmulate.setFocusable(false);
+        jToolBar.add(jButtonEmulate);
+
+        jButtonUpload.setText("upload");
+        jButtonUpload.setFocusable(false);
+        jButtonUpload.addActionListener(new java.awt.event.ActionListener()
+        {
+            public void actionPerformed(java.awt.event.ActionEvent evt)
+            {
+                jButtonUploadActionPerformed(evt);
+            }
+        });
+        jToolBar.add(jButtonUpload);
+
+        jButtonSerial.setText("serial");
+        jButtonSerial.setFocusable(false);
+        jButtonSerial.addActionListener(new java.awt.event.ActionListener()
+        {
+            public void actionPerformed(java.awt.event.ActionEvent evt)
+            {
+                jButtonSerialActionPerformed(evt);
+            }
+        });
+        jToolBar.add(jButtonSerial);
+        jToolBar.add(filler1);
+
+        jSplitPane1.setOrientation(javax.swing.JSplitPane.VERTICAL_SPLIT);
+
+        jSplitPane2.setBorder(javax.swing.BorderFactory.createBevelBorder(javax.swing.border.BevelBorder.RAISED));
+        jSplitPane2.setMinimumSize(new java.awt.Dimension(600, 250));
+
+        jPanel2.setLayout(new javax.swing.BoxLayout(jPanel2, javax.swing.BoxLayout.Y_AXIS));
+
+        jLabelRedLed.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/led-red-16.png"))); // NOI18N
+        jLabelRedLed.setText("Red Led");
+        jLabelRedLed.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelRedLed);
+
+        jLabelGreenLed.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/led-green-16.png"))); // NOI18N
+        jLabelGreenLed.setText("Green Led ");
+        jLabelGreenLed.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelGreenLed);
+
+        jLabelYellowLed.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/led-yellow-16.png"))); // NOI18N
+        jLabelYellowLed.setText("Yellow Led");
+        jLabelYellowLed.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelYellowLed);
+
+        jLabelRedLedAnalog.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/led-red-16.png"))); // NOI18N
+        jLabelRedLedAnalog.setText("Red Led (PWM)");
+        jLabelRedLedAnalog.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelRedLedAnalog);
+
+        jLabelGreenLedAnalog.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/led-green-16.png"))); // NOI18N
+        jLabelGreenLedAnalog.setText("Green Led (PWM)");
+        jLabelGreenLedAnalog.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+        });
+        jLabelGreenLedAnalog.addMouseMotionListener(new java.awt.event.MouseMotionAdapter()
+        {
+            public void mouseMoved(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelGreenLedAnalog);
+
+        jLabelYellowLedAnalog.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/led-yellow-16.png"))); // NOI18N
+        jLabelYellowLedAnalog.setText("Yellow Led (PWM)");
+        jLabelYellowLedAnalog.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+        });
+        jLabelYellowLedAnalog.addMouseMotionListener(new java.awt.event.MouseMotionAdapter()
+        {
+            public void mouseMoved(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelYellowLedAnalog);
+
+        jLabelRGB.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/led-rgb-16.png"))); // NOI18N
+        jLabelRGB.setText("Led (RGB)");
+        jLabelRGB.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelRGB);
+
+        jLabelButton.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/button16.png"))); // NOI18N
+        jLabelButton.setText("Button");
+        jLabelButton.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelButton);
+
+        jLabelSlider.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/slider16.png"))); // NOI18N
+        jLabelSlider.setText("Slider");
+        jLabelSlider.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelSlider);
+
+        jLabelSlideLog.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/slider16.png"))); // NOI18N
+        jLabelSlideLog.setText("Slider (Log)");
+        jLabelSlideLog.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelSlideLog);
+
+        jLabelBuzzer.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/speaker16.png"))); // NOI18N
+        jLabelBuzzer.setText("Buzzer");
+        jLabelBuzzer.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelBuzzer);
+
+        jLabelLDR.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/ldr16.png"))); // NOI18N
+        jLabelLDR.setText("Light sensor");
+        jLabelLDR.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelLDR);
+
+        jLabelTemperature.setIcon(new javax.swing.ImageIcon(getClass().getResource("/com/virtualino/ui/temperature16.png"))); // NOI18N
+        jLabelTemperature.setText("Temperature s.");
+        jLabelTemperature.addMouseListener(new java.awt.event.MouseAdapter()
+        {
+            public void mousePressed(java.awt.event.MouseEvent evt)
+            {
+                paletteMousePressed(evt);
+            }
+            public void mouseReleased(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseReleased(evt);
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseExited(evt);
+            }
+            public void mouseEntered(java.awt.event.MouseEvent evt)
+            {
+                paletteMouseEntered(evt);
+            }
+        });
+        jPanel2.add(jLabelTemperature);
+
+        jTabbedPane1.addTab("Basic", jPanel2);
+
+        jPanel3.setLayout(new javax.swing.BoxLayout(jPanel3, javax.swing.BoxLayout.Y_AXIS));
+
+        jLabel7.setText("Pot.");
+        jPanel3.add(jLabel7);
+
+        jLabel9.setText("Vibrator module");
+        jPanel3.add(jLabel9);
+
+        jLabel10.setText("Loudspeaker");
+        jPanel3.add(jLabel10);
+
+        jTabbedPane1.addTab("More", jPanel3);
+
+        jSplitPane2.setLeftComponent(jTabbedPane1);
+
+        jSplitPane1.setTopComponent(jSplitPane2);
+
+        jMenuFile.setText("File");
+
+        jMenuItemNew.setText("New project");
+        jMenuItemNew.addActionListener(new java.awt.event.ActionListener()
+        {
+            public void actionPerformed(java.awt.event.ActionEvent evt)
+            {
+                jMenuItemNewActionPerformed(evt);
+            }
+        });
+        jMenuFile.add(jMenuItemNew);
+
+        jMenuItemLoad.setText("Load project");
+        jMenuItemLoad.addActionListener(new java.awt.event.ActionListener()
+        {
+            public void actionPerformed(java.awt.event.ActionEvent evt)
+            {
+                jMenuItemLoadActionPerformed(evt);
+            }
+        });
+        jMenuFile.add(jMenuItemLoad);
+
+        jMenuItemSave.setText("Save project");
+        jMenuItemSave.addActionListener(new java.awt.event.ActionListener()
+        {
+            public void actionPerformed(java.awt.event.ActionEvent evt)
+            {
+                jMenuItemSaveActionPerformed(evt);
+            }
+        });
+        jMenuFile.add(jMenuItemSave);
+        jMenuFile.add(jSeparator1);
+
+        jMenuItemExit.setText("Quit");
+        jMenuFile.add(jMenuItemExit);
+
+        jMenuBar.add(jMenuFile);
+
+        jMenuHelp.setText("Help");
+
+        jMenuItem1.setText("About");
+        jMenuHelp.add(jMenuItem1);
+
+        jMenuBar.add(jMenuHelp);
+
+        setJMenuBar(jMenuBar);
+
+        javax.swing.GroupLayout layout = new javax.swing.GroupLayout(getContentPane());
+        getContentPane().setLayout(layout);
+        layout.setHorizontalGroup(
+            layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addComponent(jSplitPane1, javax.swing.GroupLayout.PREFERRED_SIZE, 0, Short.MAX_VALUE)
+            .addComponent(jToolBar, javax.swing.GroupLayout.DEFAULT_SIZE, 740, Short.MAX_VALUE)
+        );
+        layout.setVerticalGroup(
+            layout.createParallelGroup(javax.swing.GroupLayout.Alignment.LEADING)
+            .addGroup(javax.swing.GroupLayout.Alignment.TRAILING, layout.createSequentialGroup()
+                .addComponent(jToolBar, javax.swing.GroupLayout.PREFERRED_SIZE, javax.swing.GroupLayout.DEFAULT_SIZE, javax.swing.GroupLayout.PREFERRED_SIZE)
+                .addPreferredGap(javax.swing.LayoutStyle.ComponentPlacement.RELATED)
+                .addComponent(jSplitPane1, javax.swing.GroupLayout.DEFAULT_SIZE, 418, Short.MAX_VALUE))
+        );
+
+        pack();
+    }// </editor-fold>//GEN-END:initComponents
+    // Variables declaration - do not modify//GEN-BEGIN:variables
+    private javax.swing.Box.Filler filler1;
+    private javax.swing.JButton jButtonEmulate;
+    private javax.swing.JButton jButtonLoad;
+    private javax.swing.JButton jButtonSave;
+    private javax.swing.JButton jButtonSerial;
+    private javax.swing.JButton jButtonUpload;
+    private javax.swing.JLabel jLabel10;
+    private javax.swing.JLabel jLabel7;
+    private javax.swing.JLabel jLabel9;
+    private javax.swing.JLabel jLabelButton;
+    private javax.swing.JLabel jLabelBuzzer;
+    private javax.swing.JLabel jLabelGreenLed;
+    private javax.swing.JLabel jLabelGreenLedAnalog;
+    private javax.swing.JLabel jLabelLDR;
+    private javax.swing.JLabel jLabelRGB;
+    private javax.swing.JLabel jLabelRedLed;
+    private javax.swing.JLabel jLabelRedLedAnalog;
+    private javax.swing.JLabel jLabelSlideLog;
+    private javax.swing.JLabel jLabelSlider;
+    private javax.swing.JLabel jLabelTemperature;
+    private javax.swing.JLabel jLabelYellowLed;
+    private javax.swing.JLabel jLabelYellowLedAnalog;
+    private javax.swing.JMenuBar jMenuBar;
+    private javax.swing.JMenu jMenuFile;
+    private javax.swing.JMenu jMenuHelp;
+    private javax.swing.JMenuItem jMenuItem1;
+    private javax.swing.JMenuItem jMenuItemExit;
+    private javax.swing.JMenuItem jMenuItemLoad;
+    private javax.swing.JMenuItem jMenuItemNew;
+    private javax.swing.JMenuItem jMenuItemSave;
+    private javax.swing.JPanel jPanel2;
+    private javax.swing.JPanel jPanel3;
+    private javax.swing.JPopupMenu.Separator jSeparator1;
+    private javax.swing.JSplitPane jSplitPane1;
+    private javax.swing.JSplitPane jSplitPane2;
+    private javax.swing.JTabbedPane jTabbedPane1;
+    private javax.swing.JToolBar jToolBar;
+    // End of variables declaration//GEN-END:variables
+}

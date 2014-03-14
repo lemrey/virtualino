@@ -1,0 +1,27 @@
+Virtualino
+==========
+
+---
+The project is managed by maven. Run the following to install pde.jar and openblocks.jar into the local repository.
+
+	$ mvn validate
+
+Run the following to compile the project
+
+	$ mvn compile
+	
+Finally
+
+	$ mvn package
+
+to package the project in a jar file
+	
+The jar package (virtualino-all.jar) will be placed in ./target, run the following to execute it
+
+	$ java -jar virtualino-all.jar
+	
+Virtualino's window will then show up :)
+	
+***NOTE*** Virtualino will look for the emulator 'simduino.elf' in its working directory.
+Place the 'simduino.elf' file in the same directory as the jar archive.
+Make sure the program is set to executable.
